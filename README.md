@@ -6,3 +6,13 @@ SMT Model = IBM model 1
 Dataset
 - Filipino words & Sentences
 - Hiligaynon words & Sentences
+
+Programming Language used:
+- Python
+
+Libraries used:
+- pickle
+- numpy
+- tensorflow
+- tkinter
+- string
