@@ -1,0 +1,319 @@
+import tkinter as tk
+from tkinter import ttk
+import spacy
+import pickle
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+
+# -----------------------------
+# Load spaCy multilingual tokenizer
+# -----------------------------
+nlp = spacy.blank("xx")  # "xx" is the multilingual blank model
+
+# -----------------------------
+# Load models
+# -----------------------------
+baseline_model_filename = "/Users/eliezer/Documents/GitHub/SMT-Thesis/Datasets/Trained Data set/Baseline_fi_hi_translation_model.pkl"
+proposed_model_filename = "/Users/eliezer/Documents/GitHub/SMT-Thesis/Datasets/Trained Data set/Proposed_fi_hi_translation_model.pkl"
+
+with open(baseline_model_filename, 'rb') as model_file:
+    baseline_t = pickle.load(model_file)
+
+with open(proposed_model_filename, 'rb') as model_file:
+    proposed_t = pickle.load(model_file)
+
+# -----------------------------
+# Extract vocab from models for matching
+# -----------------------------
+fi_words = set(pair[0] for pair in baseline_t.keys())
+hi_words = set(pair[1] for pair in baseline_t.keys())
+
+# -----------------------------
+# Tokenization using spaCy
+# -----------------------------
+def tokenize(sentence):
+    return [token.text for token in nlp(sentence)]
+
+# -----------------------------
+# Word classification
+# -----------------------------
+def classify_word_numerical(original_word, translated_word):
+    if original_word == translated_word:
+        return 0  # Equal
+    elif len(translated_word) < len(original_word):
+        return 1  # Under
+    return 2  # Over
+
+# -----------------------------
+# BLEU score function
+# -----------------------------
+def compute_bleu(reference_tokens, candidate_tokens):
+    smoothie = SmoothingFunction().method4
+    return sentence_bleu([reference_tokens], candidate_tokens, smoothing_function=smoothie)
+
+# -----------------------------
+# Translation logic
+# -----------------------------
+def translate(model, direction, input_sentence):
+    tokenized_input = tokenize(input_sentence)
+
+    translated_sentence = []
+    error_classifications = []
+    probabilities = []
+
+    if direction == 'fi_to_hi':
+        for fi_word in tokenized_input:
+            best_hi_word, max_prob = None, 0
+            for hi_word in hi_words:
+                if (fi_word, hi_word) in model and model[(fi_word, hi_word)] > max_prob:
+                    best_hi_word = hi_word
+                    max_prob = model[(fi_word, hi_word)]
+            if best_hi_word:
+                translated_sentence.append(best_hi_word)
+                error_classifications.append(classify_word_numerical(fi_word, best_hi_word))
+                probabilities.append(max_prob)
+            else:
+                translated_sentence.append(fi_word)
+                error_classifications.append(2)
+                probabilities.append(0.0)
+    else:  # hi_to_fi
+        for hi_word in tokenized_input:
+            best_fi_word, max_prob = None, 0
+            for fi_word in fi_words:
+                if (fi_word, hi_word) in model and model[(fi_word, hi_word)] > max_prob:
+                    best_fi_word = fi_word
+                    max_prob = model[(fi_word, hi_word)]
+            if best_fi_word:
+                translated_sentence.append(best_fi_word)
+                error_classifications.append(classify_word_numerical(hi_word, best_fi_word))
+                probabilities.append(max_prob)
+            else:
+                translated_sentence.append(hi_word)
+                error_classifications.append(2)
+                probabilities.append(0.0)
+
+    avg_prob = sum(probabilities) / len(probabilities) if probabilities else 0.0
+    return translated_sentence, error_classifications, avg_prob
+
+# -----------------------------
+# Format output
+# -----------------------------
+def format_translation(translated_sentence):
+    return " ".join(translated_sentence)
+
+# -----------------------------
+# Update translation outputs and metrics
+# -----------------------------
+def update_translations():
+    direction = lang_var.get()
+    input_sentence = text_input.get("1.0", tk.END).strip()
+
+    baseline_translation, baseline_errors, baseline_prob = translate(baseline_t, direction, input_sentence)
+    proposed_translation, proposed_errors, proposed_prob = translate(proposed_t, direction, input_sentence)
+
+    baseline_output_text = format_translation(baseline_translation)
+    proposed_output_text = format_translation(proposed_translation)
+
+    baseline_output.config(state=tk.NORMAL)
+    baseline_output.delete("1.0", tk.END)
+    baseline_output.insert(tk.END, baseline_output_text)
+    baseline_output.config(state=tk.DISABLED)
+
+    proposed_output.config(state=tk.NORMAL)
+    proposed_output.delete("1.0", tk.END)
+    proposed_output.insert(tk.END, proposed_output_text)
+    proposed_output.config(state=tk.DISABLED)
+
+    reference_tokens = tokenize(input_sentence)
+    baseline_bleu = compute_bleu(reference_tokens, baseline_translation)
+    proposed_bleu = compute_bleu(reference_tokens, proposed_translation)
+
+    # Update the StringVars (panel reads from these)
+    classification_var.set(
+        f"Bi-Statistical Quality: {baseline_errors}\n"
+        f"Statistical Quality: {proposed_errors}"
+    )
+    probability_var.set(
+        f"Bi-Statistical Avg Probability: {baseline_prob:.4f}\n"
+        f"Statistical Avg Probability: {proposed_prob:.4f}"
+    )
+    bleu_var.set(
+        f"Bi-Statistical BLEU: {baseline_bleu:.4f}\n"
+        f"Statistical BLEU: {proposed_bleu:.4f}"
+    )
+
+# -----------------------------
+# Clear all fields
+# -----------------------------
+def clear_fields():
+    text_input.delete("1.0", tk.END)
+    baseline_output.config(state=tk.NORMAL)
+    baseline_output.delete("1.0", tk.END)
+    baseline_output.config(state=tk.DISABLED)
+
+    proposed_output.config(state=tk.NORMAL)
+    proposed_output.delete("1.0", tk.END)
+    proposed_output.config(state=tk.DISABLED)
+
+    classification_var.set("")
+    probability_var.set("")
+    bleu_var.set("")
+
+# -----------------------------
+# Center helper for popup
+# -----------------------------
+def center_over(parent, child, offset_x=0, offset_y=0):
+    """Center `child` (a Toplevel) over `parent` (root or another window)."""
+    parent.update_idletasks()
+    child.update_idletasks()
+
+    pw = parent.winfo_width()
+    ph = parent.winfo_height()
+    px = parent.winfo_rootx()
+    py = parent.winfo_rooty()
+
+    cw = child.winfo_width()
+    ch = child.winfo_height()
+
+    x = px + (pw - cw) // 2 + offset_x
+    y = py + (ph - ch) // 2 + offset_y
+
+    child.geometry(f"+{x}+{y}")
+
+# -----------------------------
+# Score Details Window Toggle
+# -----------------------------
+score_window = None  # global handle to the Toplevel window
+
+def toggle_score_window():
+    """Show or hide the Score Details window."""
+    global score_window
+
+    # If open -> close it
+    if score_window is not None and score_window.winfo_exists():
+        score_window.destroy()
+        score_window = None
+        score_button.config(text="Show Score Details")
+        return
+
+    # Create the window
+    score_window = tk.Toplevel(root)
+    score_window.title("Score Details")
+    score_window.resizable(False, False)
+
+    # Main container frame inside window
+    container = ttk.Frame(score_window, padding=10)
+    container.pack(fill="both", expand=True)
+
+    # Legend at the top
+    legend_label = tk.Label(
+        container, text="Legend: 0 = Equal, 1 = Under, 2 = Over",
+        font=("Helvetica", 9), fg="gray", justify="left", anchor="w"
+    )
+    legend_label.pack(anchor="w", pady=(0, 10))
+
+    # Labels bound to StringVars
+    classification_label = tk.Label(
+        container, textvariable=classification_var,
+        font=("Helvetica", 10), fg="Black", justify="left", anchor="w"
+    )
+    classification_label.pack(anchor="w", pady=(0, 8))
+
+    probability_label = tk.Label(
+        container, textvariable=probability_var,
+        font=("Helvetica", 10), fg="Black", justify="left", anchor="w"
+    )
+    probability_label.pack(anchor="w", pady=(0, 8))
+
+    bleu_label = tk.Label(
+        container, textvariable=bleu_var,
+        font=("Helvetica", 10), fg="Black", justify="left", anchor="w"
+    )
+    bleu_label.pack(anchor="w", pady=(0, 8))
+
+    # Update button text to reflect hide state
+    score_button.config(text="Hide Score Details")
+
+    # Ensure window closes cleanly when user clicks the window close button
+    def on_close():
+        global score_window
+        if score_window is not None and score_window.winfo_exists():
+            score_window.destroy()
+        score_window = None
+        score_button.config(text="Show Score Details")
+
+    score_window.protocol("WM_DELETE_WINDOW", on_close)
+
+    # Center popup over main window
+    center_over(root, score_window)
+
+# -----------------------------
+# GUI Setup
+# -----------------------------
+root = tk.Tk()
+root.title("Fi-Hi Translator")
+root.geometry("1000x400")  # narrower since side panel removed
+root.resizable(False, False)
+
+# StringVars for dynamic score text
+classification_var = tk.StringVar(value="")
+probability_var = tk.StringVar(value="")
+bleu_var = tk.StringVar(value="")
+
+# Input Frame
+input_frame = tk.Frame(root)
+input_frame.grid(row=0, column=0, padx=20, pady=20, sticky="n")
+
+# Center Frame
+center_frame = tk.Frame(root)
+center_frame.grid(row=0, column=1, padx=20, pady=20, sticky="n")
+
+# Output Frame
+output_frame = tk.Frame(root)
+output_frame.grid(row=0, column=2, padx=20, pady=20, sticky="n")
+
+# Input area
+input_title = tk.Label(input_frame, text="Enter Text to Translate:", font=("Helvetica", 14, "bold"))
+input_title.grid(row=0, column=0, pady=(0, 10))
+
+text_input = tk.Text(input_frame, width=50, height=23)
+text_input.grid(row=1, column=0, pady=10)
+
+# Translation Options
+lang_var = tk.StringVar(value='fi_to_hi')
+fi_to_hi_radio = tk.Radiobutton(center_frame, text="Filipino to Hiligaynon", variable=lang_var, value='fi_to_hi')
+fi_to_hi_radio.grid(row=0, column=0, pady=5)
+
+hi_to_fi_radio = tk.Radiobutton(center_frame, text="Hiligaynon to Filipino", variable=lang_var, value='hi_to_fi')
+hi_to_fi_radio.grid(row=1, column=0, pady=5)
+
+translate_button = tk.Button(center_frame, text="Translate", command=update_translations)
+translate_button.grid(row=2, column=0, pady=10)
+
+clear_button = tk.Button(center_frame, text="Clear", command=clear_fields)
+clear_button.grid(row=3, column=0, pady=10)
+
+# NEW: Score Details toggle button (below Clear)
+score_button = tk.Button(center_frame, text="Show Score Details", command=toggle_score_window)
+score_button.grid(row=4, column=0, pady=10)
+
+# Output area
+baseline_label = tk.Label(output_frame, text="Bidirectional Statistical Machine Translation:", font=("Helvetica", 12, "bold"))
+baseline_label.grid(row=0, column=0, pady=(10, 0))
+
+baseline_output = tk.Text(output_frame, height=10, width=50, wrap="word", state=tk.DISABLED)
+baseline_output.grid(row=1, column=0, pady=(0, 20))
+
+proposed_label = tk.Label(output_frame, text="Statistical Machine Translation:", font=("Helvetica", 12, "bold"))
+proposed_label.grid(row=2, column=0, pady=(10, 0))
+
+proposed_output = tk.Text(output_frame, height=10, width=50, wrap="word", state=tk.DISABLED)
+proposed_output.grid(row=3, column=0, pady=(0, 20))
+
+# OPTIONAL: Auto-recenter popup when root moves
+def _recenter_on_root_move(event):
+    if score_window is not None and score_window.winfo_exists():
+        center_over(root, score_window)
+
+root.bind("<Configure>", _recenter_on_root_move)
+
+root.mainloop()
