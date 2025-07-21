@@ -13,6 +13,6 @@ Programming Language used:
 Libraries used:
 - pickle
 - numpy
-- tensorflow
+- Spacy
 - tkinter
 - string
